@@ -91,13 +91,14 @@ def play_song(sp, song_uri, device_id):
         sp.start_playback(device_id=device_id, uris=[song_uri])
         logging.info(f'Reproduciendo {song_uri}')
         # Esperar a que la canción se reproduzca completamente
-        track = sp.track(song_uri)
+        track = sp.track(song_uri)  # Sin el parámetro market
         duration_ms = track['duration_ms']
         duration_sec = duration_ms / 1000
         logging.info(f'Duración de la canción: {duration_sec:.2f} segundos')
         human_pause(duration_sec, duration_sec + 5)  # Añadir un margen de 5 segundos
     except Exception as e:
         logging.error(f'Error reproduciendo canción {song_uri}: {e}')
+
 
 # Función para iniciar sesión y obtener dispositivo
 def login_and_get_device(client_id, client_secret, redirect_uri, proxy):
