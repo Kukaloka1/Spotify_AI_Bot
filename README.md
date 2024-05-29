@@ -77,3 +77,4 @@ Este proyecto es de código cerrado y todos los derechos están reservados por B
 
 BitTech Network www.bittechnetwork.com
 
+![bit logo](https://github.com/Kukaloka1/Kukaloka1/assets/130247025/a127acb3-5baf-48c3-b9e1-4f5158c8fd2b)
