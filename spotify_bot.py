@@ -36,17 +36,17 @@ app.secret_key = os.urandom(24)
 openai.api_key = os.getenv('OPENAI_API_KEY')
 logging.info('OpenAI API key configurada.')
 
-# Spotify OAuth settings
+# Configuración de OAuth de Spotify
 SPOTIPY_CLIENT_ID = os.getenv('SPOTIPY_CLIENT_ID')
 SPOTIPY_CLIENT_SECRET = os.getenv('SPOTIPY_CLIENT_SECRET')
 SPOTIPY_REDIRECT_URI = os.getenv('SPOTIPY_REDIRECT_URI')
 SCOPE = "user-read-playback-state,user-modify-playback-state"
 
-# Configuración del proxy Data Impulse
+# Configuración del proxy DataImpulse
 def get_data_impulse_proxy():
     proxy = {
-        'http': f"http://{os.getenv('DATA_IMPULSE_USER')}:{os.getenv('DATA_IMPULSE_PASS')}@{os.getenv('DATA_IMPULSE_IP')}:{os.getenv('DATA_IMPULSE_PORT')}",
-        'https': f"http://{os.getenv('DATA_IMPULSE_USER')}:{os.getenv('DATA_IMPULSE_PASS')}@{os.getenv('DATA_IMPULSE_IP')}:{os.getenv('DATA_IMPULSE_PORT')}"
+        'http': f"http://{os.getenv('DATA_IMPULSE_USER')}:{os.getenv('DATA_IMPULSE_PASS')}@gw.dataimpulse.com:823",
+        'https': f"http://{os.getenv('DATA_IMPULSE_USER')}:{os.getenv('DATA_IMPULSE_PASS')}@gw.dataimpulse.com:823"
     }
     logging.info(f'Proxy configurado: {proxy}')
     return proxy
@@ -85,12 +85,17 @@ def human_pause(min_seconds, max_seconds):
     time.sleep(pause_time)
 
 # Función para reproducir una canción
-def play_song(sp, song_uri, device_id, proxy):
+def play_song(sp, song_uri, device_id):
     try:
         logging.info(f'Intentando reproducir canción: {song_uri}')
-        sp.start_playback(device_id=device_id, uris=[song_uri], proxies=proxy)
-        logging.info(f'Reproduciendo {song_uri} con proxy {proxy}')
-        human_pause(150, 210)
+        sp.start_playback(device_id=device_id, uris=[song_uri])
+        logging.info(f'Reproduciendo {song_uri}')
+        # Esperar a que la canción se reproduzca completamente
+        track = sp.track(song_uri)
+        duration_ms = track['duration_ms']
+        duration_sec = duration_ms / 1000
+        logging.info(f'Duración de la canción: {duration_sec:.2f} segundos')
+        human_pause(duration_sec, duration_sec + 5)  # Añadir un margen de 5 segundos
     except Exception as e:
         logging.error(f'Error reproduciendo canción {song_uri}: {e}')
 
@@ -98,10 +103,12 @@ def play_song(sp, song_uri, device_id, proxy):
 def login_and_get_device(client_id, client_secret, redirect_uri, proxy):
     try:
         logging.info('Intentando iniciar sesión en Spotify.')
-        sp = spotipy.Spotify(auth_manager=SpotifyOAuth(client_id=client_id,
-                                                       client_secret=client_secret,
-                                                       redirect_uri=redirect_uri,
-                                                       scope=SCOPE))
+        sp_oauth = SpotifyOAuth(client_id=client_id,
+                                client_secret=client_secret,
+                                redirect_uri=redirect_uri,
+                                scope=SCOPE,
+                                proxies=proxy)
+        sp = spotipy.Spotify(auth_manager=sp_oauth)
         devices = sp.devices()
         if devices['devices']:
             device_id = devices['devices'][0]['id']
@@ -117,8 +124,8 @@ def login_and_get_device(client_id, client_secret, redirect_uri, proxy):
 # Función para determinar si es hora de una pausa prolongada
 def should_take_long_break():
     current_hour = time.localtime().tm_hour
-    take_break = random.random() < 0.1 and (8 <= current_hour <= 22)
-    if (8 <= current_hour <= 22) and take_break:
+    take_break = random.random() < 0.05 and (8 <= current_hour <= 22)  # Reducir la probabilidad a 0.05
+    if take_break:
         logging.info('Tomando una pausa prolongada')
     return take_break
 
@@ -178,34 +185,41 @@ def start_playback():
         logging.warning('No se encontró información de token, redirigiendo a login')
         return redirect('/')
     
-    proxy = get_data_impulse_proxy()
-    sp, device_id = login_and_get_device(SPOTIPY_CLIENT_ID, SPOTIPY_CLIENT_SECRET, SPOTIPY_REDIRECT_URI, proxy)
-    if sp and device_id:
-        logging.info('Iniciando reproducción de canciones del artista principal.')
-        for _ in range(100):
-            if should_take_long_break():
-                human_pause(3600, 7200)
-            else:
-                song_uri = random.choice(artist_song_uris)
-                logging.info(f'Reproduciendo canción del artista principal: {song_uri}')
-                play_song(sp, song_uri, device_id, proxy)
-                human_pause(5, 15)
-        
-        logging.info('Finalizando reproducción de canciones del artista principal.')
-        
-        prompt = "Dame una recomendación para una canción popular de otro artista para reproducir en Spotify."
-        recommendation = get_gpt4_recommendation(prompt)
-        if recommendation:
-            logging.info(f'Reproduciendo recomendación de GPT-4: {recommendation}')
-            play_song(sp, recommendation, device_id, proxy)
-    else:
-        logging.error('No se pudo iniciar sesión en Spotify o no se encontró un dispositivo disponible.')
+    try:
+        proxy = get_data_impulse_proxy()
+        sp, device_id = login_and_get_device(SPOTIPY_CLIENT_ID, SPOTIPY_CLIENT_SECRET, SPOTIPY_REDIRECT_URI, proxy)
+        if sp and device_id:
+            logging.info('Iniciando reproducción de canciones del artista principal.')
+            for _ in range(100):
+                if should_take_long_break():
+                    human_pause(3600, 7200)
+                else:
+                    song_uri = random.choice(artist_song_uris)
+                    logging.info(f'Reproduciendo canción del artista principal: {song_uri}')
+                    play_song(sp, song_uri, device_id)
+                    human_pause(5, 15)
+            
+            logging.info('Finalizando reproducción de canciones del artista principal.')
+            
+            prompt = "Dame una recomendación para una canción popular de otro artista para reproducir en Spotify."
+            recommendation = get_gpt4_recommendation(prompt)
+            if recommendation:
+                logging.info(f'Reproduciendo recomendación de GPT-4: {recommendation}')
+                play_song(sp, recommendation, device_id)
+        else:
+            logging.error('No se pudo iniciar sesión en Spotify o no se encontró un dispositivo disponible.')
+            return "Error en la reproducción de música", 500
+    except Exception as e:
+        logging.error(f'Error en start_playback: {e}', exc_info=True)
         return "Error en la reproducción de música", 500
     
     return "Reproducción de música iniciada."
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+
+
+
 
 
 
