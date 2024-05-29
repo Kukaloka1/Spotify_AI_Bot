@@ -7,6 +7,8 @@ import os
 from dotenv import load_dotenv
 from flask import Flask, request, redirect, session, url_for
 import logging
+import requests
+from urllib.parse import urlencode
 
 print("bIT TECH nETWORK wIL RULE THE wOlrd")
 
@@ -62,7 +64,7 @@ def get_gpt4_recommendation(prompt):
             max_tokens=300
         )
         recommendation = response.choices[0].message['content'].strip()
-        logging.info(f'Recomendación de GPT-4: {recommendation}')
+        logging.info(f'Recomendación de GPT-4 recibida: {recommendation}')
         return recommendation
     except Exception as e:
         logging.error(f'Error obteniendo recomendación de GPT-4: {e}')
@@ -75,9 +77,6 @@ artist_song_uris = [
     'spotify:track:1hJHjZRYCXl8KWWCOywRbp'   # Canción 3
 ]
 logging.info('Lista de canciones del artista principal configurada.')
-
-# Lista de canciones de otros artistas para reproducción aleatoria
-other_song_uris = []  # Dejamos esto vacío
 
 # Función para simular una pausa humana
 def human_pause(min_seconds, max_seconds):
@@ -119,7 +118,7 @@ def login_and_get_device(client_id, client_secret, redirect_uri, proxy):
 def should_take_long_break():
     current_hour = time.localtime().tm_hour
     take_break = random.random() < 0.1 and (8 <= current_hour <= 22)
-    if take_break:
+    if (8 <= current_hour <= 22) and take_break:
         logging.info('Tomando una pausa prolongada')
     return take_break
 
@@ -127,52 +126,53 @@ def should_take_long_break():
 @app.route('/')
 def login():
     logging.info('Iniciando proceso de autenticación.')
-    sp_oauth = SpotifyOAuth(client_id=SPOTIPY_CLIENT_ID,
-                            client_secret=SPOTIPY_CLIENT_SECRET,
-                            redirect_uri=SPOTIPY_REDIRECT_URI,
-                            scope=SCOPE)
-    auth_url = sp_oauth.get_authorize_url()
+    state = os.urandom(16).hex()
+    auth_url = "https://accounts.spotify.com/authorize?" + urlencode({
+        'response_type': 'code',
+        'client_id': SPOTIPY_CLIENT_ID,
+        'scope': SCOPE,
+        'redirect_uri': SPOTIPY_REDIRECT_URI,
+        'state': state
+    })
     logging.info(f'Redirigiendo a URL de autorización: {auth_url}')
     return redirect(auth_url)
 
 @app.route('/callback')
 def callback():
     logging.info('Procesando callback de autenticación.')
-    sp_oauth = SpotifyOAuth(client_id=SPOTIPY_CLIENT_ID,
-                            client_secret=SPOTIPY_CLIENT_SECRET,
-                            redirect_uri=SPOTIPY_REDIRECT_URI,
-                            scope=SCOPE)
-    session.clear()
     code = request.args.get('code')
     state = request.args.get('state')
     error = request.args.get('error')
     logging.info(f'Código de autenticación recibido: {code}')
     logging.info(f'State recibido: {state}')
     logging.info(f'Error recibido: {error}')
-    if code:
-        token_info = sp_oauth.get_access_token(code)
-        session['token_info'] = token_info
-        logging.info('Autenticación exitosa, token obtenido.')
-        return redirect(url_for('play_music'))
-    else:
+    
+    if not code:
         logging.error('No se recibió código de autenticación')
         return "Error en el callback de autenticación: no se recibió código de autenticación", 500
+    
+    # Solicitar token de acceso
+    token_url = "https://accounts.spotify.com/api/token"
+    response = requests.post(token_url, data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": SPOTIPY_REDIRECT_URI,
+        "client_id": SPOTIPY_CLIENT_ID,
+        "client_secret": SPOTIPY_CLIENT_SECRET
+    }, headers={"Content-Type": "application/x-www-form-urlencoded"})
+    
+    logging.info(f'Respuesta del token: {response.json()}')
+    
+    if response.status_code != 200:
+        logging.error(f'Error al obtener token: {response.json()}')
+        return "Error al obtener token", 500
+    
+    session['token_info'] = response.json()
+    return redirect(url_for('start_playback'))
 
-@app.route('/callback_debug')
-def callback_debug():
-    logging.info('Procesando callback de autenticación (Debug).')
-    code = request.args.get('code')
-    state = request.args.get('state')
-    error = request.args.get('error')
-    logging.info(f'Código de autenticación recibido: {code}')
-    logging.info(f'State recibido: {state}')
-    logging.info(f'Error recibido: {error}')
-    return f"Code: {code}, State: {state}, Error: {error}", 200
-
-
-@app.route('/play_music')
-def play_music():
-    logging.info('Iniciando reproducción de música.')
+@app.route('/start_playback')
+def start_playback():
+    logging.info('Trigger manual para iniciar la reproducción de música.')
     token_info = session.get('token_info')
     if not token_info:
         logging.warning('No se encontró información de token, redirigiendo a login')
@@ -181,28 +181,42 @@ def play_music():
     proxy = get_data_impulse_proxy()
     sp, device_id = login_and_get_device(SPOTIPY_CLIENT_ID, SPOTIPY_CLIENT_SECRET, SPOTIPY_REDIRECT_URI, proxy)
     if sp and device_id:
+        logging.info('Iniciando reproducción de canciones del artista principal.')
         for _ in range(100):
             if should_take_long_break():
                 human_pause(3600, 7200)
             else:
                 song_uri = random.choice(artist_song_uris)
+                logging.info(f'Reproduciendo canción del artista principal: {song_uri}')
                 play_song(sp, song_uri, device_id, proxy)
-                if random.random() < 0.1:
-                    for _ in range(random.randint(2, 10)):
-                        play_song(sp, song_uri, device_id, proxy)
                 human_pause(5, 15)
-        logging.info('Finalizando reproducción')
+        
+        logging.info('Finalizando reproducción de canciones del artista principal.')
         
         prompt = "Dame una recomendación para una canción popular de otro artista para reproducir en Spotify."
         recommendation = get_gpt4_recommendation(prompt)
         if recommendation:
+            logging.info(f'Reproduciendo recomendación de GPT-4: {recommendation}')
             play_song(sp, recommendation, device_id, proxy)
     else:
         logging.error('No se pudo iniciar sesión en Spotify o no se encontró un dispositivo disponible.')
         return "Error en la reproducción de música", 500
+    
+    return "Reproducción de música iniciada."
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+
+
+
+
+
+
+
+
+
+
+
 
 
 
